@@ -9,7 +9,7 @@ import numpy as np
 from ..source_estimate import SourceEstimate, VolSourceEstimate
 from ..source_space import _ensure_src
 from ..utils import check_random_state, warn, _check_option
-
+from ..label import Label
 
 def select_source_in_label(src, label, random_state=None, location='random',
                            subject=None, subjects_dir=None, surf='sphere'):
@@ -300,3 +300,82 @@ def simulate_stc(src, labels, stc_data, tmin, tstep, value_fun=None):
     stc = SourceEstimate(data, vertices=vertno, tmin=tmin, tstep=tstep,
                          subject=subject)
     return stc
+
+
+class SourceSimulator():
+    """
+    Simulate Stcs
+    """
+
+    def __init__(self, tmin=None, tstep=None, subject=None, verbose=None):
+        self.tmin = tmin
+        self.tstep = tstep
+        self.subject = subject
+        self.verbose = verbose
+        self.labels = []
+        self.waveforms = []
+        self.events = np.empty((0, 3))
+        self.duration = 0
+        self.slast = []
+
+    def add_data(self, source_label, waveform, events):
+        '''
+        '''
+        # Check for mistakes
+        # Source_labels is a Labels instance
+        if not isinstance(source_label, Label):
+            raise ValueError('source_label must be a Label,'
+                             'not %s' % type(source_label))
+        # Waveform is a np.array or list of np arrays
+        # If it is not a list then make it one
+        if not isinstance(waveform, list) or len(waveform) == 1:
+            waveform = [waveform]*len(events)
+            # The length is either equal to the length of events, or 1
+        if len(waveform) != len(events):
+            raise ValueError('Number of waveforms and events should match'
+                             'or there should be a single waveform')
+        # Update the maximum duration possible based on the events
+        # imax = np.argmax(events[:,2])
+        # if events[imax,2]+len(waveform)
+        self.labels.extend([source_label]*len(events))
+        self.waveforms.extend(waveform)
+        self.events = np.vstack(self.events, events)
+        self.slast = np.array([self.events[i, 0]+len(w[i])
+                               for i, w in enumerate(self.waveforms)])
+
+        return self
+
+    def generate_stc(self, src, duration=None):
+        '''
+        '''
+        start_sample = 0
+        chunk_sample_size = 1000./self.tstep
+        # Duration of the simulation can be optionally provided
+        # If not, the percomputed maximum last sample is used
+        if duration is None:
+            duration = np.max(self.slast)
+        # Loop over chunks of 1 second. Can be modified to different value
+        for start_sample in range(start_sample, duration, chunk_sample_size):
+            end_sample = start_sample+chunk_sample_size
+            # Initialize the stc_data array
+            stc_data = np.zeros((len(self.labels), chunk_sample_size))
+            # Select only the indices that have events in the time chunk
+            ind = np.nonzero(np.logical_and(self.slast > start_sample,
+                                            self.events[:, 0] < end_sample))
+            # Loop only over the items that are in the time chunk
+            for i, (waveform, event) in enumerate(zip(self.waveforms[ind],
+                                                      self.events[ind])):
+                # We retrieve the first and last sample of each waveform
+                # According to the corresponding event
+                sample_begin = event[0]
+                sample_end = self.slast[i]
+                # Recover the indices of the event that should be in the chunk
+                window_ind = np.in1d(np.range(sample_begin, sample_end),
+                                     np.range(start_sample, end_sample))
+                # add the resulting waveform chunk to the corresponding label
+                stc_data[ind[i]] += waveform[window_ind]
+            stc = simulate_stc(src, self.labels, stc_data,
+                               start_sample*self.tstep,
+                               self.tstep)
+            # Maybe we need to return something different for events
+            yield (stc, self.events[ind])
