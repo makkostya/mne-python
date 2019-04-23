@@ -339,41 +339,47 @@ class SourceSimulator():
         # if events[imax,2]+len(waveform)
         self.labels.extend([source_label]*len(events))
         self.waveforms.extend(waveform)
-        self.events = np.vstack(self.events, events)
-        self.slast = np.array([self.events[i, 0]+len(w[i])
+        self.events = np.vstack([self.events, events])
+        # First sample per waveform is the first column of events
+        # Last is computed below
+        self.last_sample = np.array([self.events[i, 0]+len(w)
                                for i, w in enumerate(self.waveforms)])
-
-        return self
 
     def generate_stc(self, src, duration=None):
         '''
         '''
-        start_sample = 0
-        chunk_sample_size = 1000./self.tstep
         # Duration of the simulation can be optionally provided
-        # If not, the percomputed maximum last sample is used
+        # If not, the precomputed maximum last sample is used
         if duration is None:
-            duration = np.max(self.slast)
-        # Loop over chunks of 1 second. Can be modified to different value
-        for start_sample in range(start_sample, duration, chunk_sample_size):
-            end_sample = start_sample+chunk_sample_size
+            duration = int(np.max(self.last_sample))
+        # Arbitrary chunk size, can be modified later to something else
+        chunk_sample_size = min(int(1. / self.tstep), duration)
+        # Loop over chunks of 1 second - or, maximum sample size.
+        # Can be modified to a different value.
+        for start_sample in range(int(self.tmin/self.tstep), duration, chunk_sample_size):
+            end_sample = min(start_sample+chunk_sample_size, duration)
             # Initialize the stc_data array
             stc_data = np.zeros((len(self.labels), chunk_sample_size))
             # Select only the indices that have events in the time chunk
-            ind = np.nonzero(np.logical_and(self.slast > start_sample,
-                                            self.events[:, 0] < end_sample))
+            ind = np.nonzero(np.logical_and(self.last_sample > start_sample,
+                                            self.events[:, 0] < end_sample))[0]
+            # print(ind, ind[0])
             # Loop only over the items that are in the time chunk
-            for i, (waveform, event) in enumerate(zip(self.waveforms[ind],
+            subset_waveforms = [self.waveforms[i] for i in ind]
+            for i, (waveform, event) in enumerate(zip(subset_waveforms,
                                                       self.events[ind])):
                 # We retrieve the first and last sample of each waveform
                 # According to the corresponding event
                 sample_begin = event[0]
-                sample_end = self.slast[i]
+                sample_end = self.last_sample[i]
                 # Recover the indices of the event that should be in the chunk
-                window_ind = np.in1d(np.range(sample_begin, sample_end),
-                                     np.range(start_sample, end_sample))
+                window_ind = np.in1d(np.arange(sample_begin, sample_end),
+                                     np.arange(start_sample, end_sample))
+                # Recover the indices of the chunk that correspond to the overlap
+                chunk_ind = np.in1d(np.arange(start_sample, end_sample),
+                                    np.arange(sample_begin, sample_end))
                 # add the resulting waveform chunk to the corresponding label
-                stc_data[ind[i]] += waveform[window_ind]
+                stc_data[ind[i]][chunk_ind] += waveform[window_ind]
             stc = simulate_stc(src, self.labels, stc_data,
                                start_sample*self.tstep,
                                self.tstep)
