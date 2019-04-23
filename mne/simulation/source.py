@@ -356,13 +356,13 @@ class SourceSimulator():
         chunk_sample_size = min(int(1. / self.tstep), duration)
         # Loop over chunks of 1 second - or, maximum sample size.
         # Can be modified to a different value.
-        for start_sample in range(int(self.tmin/self.tstep), duration, chunk_sample_size):
-            end_sample = min(start_sample+chunk_sample_size, duration)
+        for chk_start_sample in range(int(self.tmin/self.tstep), duration, chunk_sample_size):
+            chk_end_sample = min(chk_start_sample+chunk_sample_size, duration)
             # Initialize the stc_data array
-            stc_data = np.zeros((len(self.labels), chunk_sample_size))
+            stc_data_chunk = np.zeros((len(self.labels), chunk_sample_size))
             # Select only the indices that have events in the time chunk
-            ind = np.nonzero(np.logical_and(self.last_sample > start_sample,
-                                            self.events[:, 0] < end_sample))[0]
+            ind = np.nonzero(np.logical_and(self.last_sample > chk_start_sample,
+                                            self.events[:, 0] < chk_end_sample))[0]
             # print(ind, ind[0])
             # Loop only over the items that are in the time chunk
             subset_waveforms = [self.waveforms[i] for i in ind]
@@ -370,18 +370,18 @@ class SourceSimulator():
                                                       self.events[ind])):
                 # We retrieve the first and last sample of each waveform
                 # According to the corresponding event
-                sample_begin = event[0]
-                sample_end = self.last_sample[i]
+                wf_begin = event[0]
+                wf_end = self.last_sample[ind[i]]
                 # Recover the indices of the event that should be in the chunk
-                window_ind = np.in1d(np.arange(sample_begin, sample_end),
-                                     np.arange(start_sample, end_sample))
+                wf_ind = np.in1d(np.arange(wf_begin, wf_end),
+                                 np.arange(chk_start_sample, chk_end_sample))
                 # Recover the indices of the chunk that correspond to the overlap
-                chunk_ind = np.in1d(np.arange(start_sample, end_sample),
-                                    np.arange(sample_begin, sample_end))
+                chunk_ind = np.in1d(np.arange(chk_start_sample, chk_end_sample),
+                                    np.arange(wf_begin, wf_end))
                 # add the resulting waveform chunk to the corresponding label
-                stc_data[ind[i]][chunk_ind] += waveform[window_ind]
-            stc = simulate_stc(src, self.labels, stc_data,
-                               start_sample*self.tstep,
-                               self.tstep)
+                stc_data_chunk[ind[i]][chunk_ind] += waveform[wf_ind]
+            stc_chunk = simulate_stc(src, self.labels, stc_data_chunk,
+                                     chk_start_sample*self.tstep,
+                                     self.tstep)
             # Maybe we need to return something different for events
-            yield (stc, self.events[ind])
+            yield (stc_chunk, self.events[ind])
