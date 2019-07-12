@@ -11,11 +11,12 @@ from scipy import linalg
 from ..io.pick import pick_channels_evoked, pick_info, pick_channels_forward
 from ..utils import logger, verbose, _check_info_inv
 from ..dipole import Dipole
+from ..source_estimate import VectorSourceEstimate
 from ._compute_beamformer import _prepare_beamformer_input
 
 
 def _apply_rap_music(data, info, times, forward, noise_cov, n_dipoles=2,
-                     picks=None):
+                     picks=None, return_type='dipoles', subject=None):
     """RAP-MUSIC for evoked data.
 
     Parameters
@@ -69,6 +70,7 @@ def _apply_rap_music(data, info, times, forward, noise_cov, n_dipoles=2,
     G_proj = G.copy()
     phi_sig_proj = phi_sig.copy()
 
+    vertices = np.empty(n_dipoles)
     for k in range(n_dipoles):
         subcorr_max = -1.
         for i_source in range(G.shape[1] // n_orient):
@@ -89,6 +91,8 @@ def _apply_rap_music(data, info, times, forward, noise_cov, n_dipoles=2,
                 source_pos = forward['source_rr'][i_source]
                 if n_orient == 1:
                     source_ori = forward['source_nn'][i_source]
+
+        vertices[k] = source_idx
 
         idx_k = slice(n_orient * source_idx, n_orient * (source_idx + 1))
         Ak = G[:, idx_k]
@@ -120,8 +124,36 @@ def _apply_rap_music(data, info, times, forward, noise_cov, n_dipoles=2,
     explained_data = np.dot(gain_dip, sol)
     residual = data - np.dot(whitener, explained_data)
     gof = 1. - np.sum(residual ** 2, axis=0) / np.sum(data ** 2, axis=0)
-    return _make_dipoles(times, poss,
-                         oris, sol, gof), explained_data
+
+    if return_type == 'dipoles':
+        return _make_dipoles(times, poss,
+                             oris, sol, gof), explained_data
+    elif return_type == 'stc':
+        if subject is None:
+            raise ValueError('Subject must not be None for stc output.')
+        return _make_vect_stc(sol, vertices, oris, times, subject)
+    else:
+        raise ValueError('Unknown return_type value.')
+
+
+def _make_vect_stc(sol, vertices, oris, times, subject):
+    data = np.empty(sol.shape[0], 3, sol.shape[0])
+    for i in range(3):
+        data[:, i, :] = np.dot(sol, np.diag(oris[:, i]))
+    stc = VectorSourceEstimate(data, vertices=vertices, tmin=times[0],
+                               tstep=times[1] - times[0], subject=subject)
+    return stc
+
+
+def _vert_fwd_to_src(vert_fwd, src):
+    src_n_vert = np.empty(len(src))
+    vertices = [[]] * len(src)
+    for i in range(len(src)):
+        src_n_vert[i] = len(src[i]['nuse'])
+    for v in vert_fwd:
+        i = np.searchsorted(src_n_vert, v)
+        vertices[i].append(v)
+    return [np.array(vert) for vert in vertices]
 
 
 def _make_dipoles(times, poss, oris, sol, gof):
@@ -183,7 +215,7 @@ def _compute_proj(A):
 
 @verbose
 def rap_music(evoked, forward, noise_cov, n_dipoles=5, return_residual=False,
-              verbose=None):
+              verbose=None, return_type='dipoles'):
     """RAP-MUSIC source localization method.
 
     Compute Recursively Applied and Projected MUltiple SIgnal Classification
